@@ -1,0 +1,6 @@
+path: E:\ProjectFAP\autoyolopqty\makehere\dataset
+train: images/train
+val: images/val
+
+nc: 3
+names: ['Steering', 'DAB', 'IP']
