@@ -335,6 +335,7 @@ class YOLOTrainerApp(QMainWindow):
             
             self.image_display_label.setPixmap(pixmap)
             self.log("Inference completed")
+            os.remove(temp_path)
         
         except Exception as e:
             QMessageBox.critical(self,"Inference Error",f"An error occurred during inference:\n{str(e)}")
