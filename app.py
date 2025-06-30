@@ -10,7 +10,7 @@ from ultralytics import YOLO
 import cv2
 from PIL import Image
 import numpy as np
-from PyQt5.QtWidgets import QApplication,QGroupBox,QGridLayout,QScrollArea,QTabWidget, QMainWindow,QLineEdit,QSlider, QTextEdit, QWidget, QVBoxLayout,QHBoxLayout, QLabel, QPushButton, QFileDialog, QMessageBox
+from PyQt5.QtWidgets import QApplication,QGroupBox,QGridLayout,QScrollArea,QTabWidget, QMainWindow,QLineEdit,QSlider, QTextEdit, QWidget, QVBoxLayout,QHBoxLayout, QLabel, QPushButton, QFileDialog, QMessageBox, QComboBox
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt5.QtGui import QPixmap, QIcon, QTransform, QImage
 
@@ -35,6 +35,10 @@ class TrainingThread(QThread):
             f"project={self.save_dir}",
             f"name={self.model_name}",
             "exist_ok=True",
+            "imgsz=640",
+            "device=cpu",
+            "workers=4",
+            "verbose=True"
         ]
         
         process=subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,bufsize=1)
@@ -45,11 +49,11 @@ class TrainingThread(QThread):
         process.wait()
         self.finished_signal.emit() 
         
-class YOLOTrainerApp(QMainWindow):
+class MODELTrainerApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("YOLO Model Trainer")
-        #self.setWindowIcon(QIcon("logo.png"))
+        self.setWindowTitle("Image Detector Modeler")
+        self.setWindowIcon(QIcon("logo.png"))
         self.setGeometry(300,200,800,600)
         self.resize(900,700)
         
@@ -58,6 +62,8 @@ class YOLOTrainerApp(QMainWindow):
         self.destination_path = ""
         self.image_rotation_angles={}
         self.current_enlarged_image_path= None
+        self.browsed_model_path = None
+        self.dark_mode_enabled = False
         
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
@@ -145,7 +151,41 @@ class YOLOTrainerApp(QMainWindow):
         self.validate_tab = QWidget()
         self.validate_layout=QVBoxLayout(self.validate_tab)
         
-        #Enlarging the imaeg
+        # Import Model section
+        model_import_group = QGroupBox("🤖 Import Model")
+        model_import_layout = QVBoxLayout()
+        
+        # Model type dropdown
+        self.model_type_combo = QComboBox()
+        self.model_type_combo.addItems(["Import Current Model", "Import Other Model"])
+        self.model_type_combo.currentTextChanged.connect(self.on_model_type_changed)
+        
+        # Browse button for other model (initially hidden)
+        self.browse_model_button = QPushButton("Browse Model File")
+        self.browse_model_button.clicked.connect(self.browse_model_file)
+        self.browse_model_button.setVisible(False)
+        
+        # Model path label
+        self.model_path_label = QLabel("No model selected")
+        self.model_path_label.setStyleSheet("color: red;")
+        
+        # Import button
+        self.import_model_button = QPushButton("Import Model")
+        self.import_model_button.clicked.connect(self.import_selected_model)
+        self.import_model_button.setEnabled(False)
+        
+        model_import_layout.addWidget(QLabel("Select Model Type:"))
+        model_import_layout.addWidget(self.model_type_combo)
+        model_import_layout.addWidget(self.browse_model_button)
+        model_import_layout.addWidget(self.model_path_label)
+        model_import_layout.addWidget(self.import_model_button)
+        model_import_group.setLayout(model_import_layout)
+        
+        # Track selected model
+        self.selected_model_path = None
+        self.current_model_available = False
+        
+        #Enlarging the image
         self.image_display_label = QLabel("🔍 Click an image from the list below to preview.")
         self.image_display_label.setAlignment(Qt.AlignCenter)
         self.image_display_label.setFixedHeight(600)
@@ -156,6 +196,11 @@ class YOLOTrainerApp(QMainWindow):
         self.rotate_button.setEnabled(False)
         self.rotate_button.clicked.connect(self.rotate_current_image)
         
+        #run inference button
+        self.inference_button = QPushButton("Run Inference")
+        self.inference_button.setEnabled(False)
+        self.inference_button.clicked.connect(self.run_inference_on_image)
+        
         #thumbnail preview
         self.thumbnail_scroll = QScrollArea()
         self.thumbnail_container = QWidget()
@@ -163,9 +208,19 @@ class YOLOTrainerApp(QMainWindow):
         self.thumbnail_scroll.setWidgetResizable(True)
         self.thumbnail_scroll.setWidget(self.thumbnail_container)
         
-        #buttton
+        # Left side - Main image display
+        left_layout = QVBoxLayout()
+        left_layout.addWidget(self.image_display_label)
+        left_layout.addWidget(self.rotate_button)
+        left_layout.addWidget(self.inference_button)
+        
+        # Right side - Controls and thumbnails arranged vertically
+        right_layout = QVBoxLayout()
+        
+        # Button group at the top right
+        button_group = QGroupBox("📂 Load Images")
         button_layout = QVBoxLayout()
-        button_layout.setSpacing(5)
+        button_layout.setSpacing(10)
         
         self.valset_button = QPushButton("📂 Validate with Val Set")
         self.valset_button.clicked.connect(self.load_val_set_images)
@@ -175,29 +230,147 @@ class YOLOTrainerApp(QMainWindow):
         
         button_layout.addWidget(self.valset_button)
         button_layout.addWidget(self.import_button)
+        button_group.setLayout(button_layout)
         
-        buttons_widget = QWidget()
-        buttons_widget.setLayout(button_layout)
+        # Thumbnail group below the buttons
+        thumbnail_group = QGroupBox("🖼️ Image Thumbnails")
+        thumbnail_group_layout = QVBoxLayout()
+        thumbnail_group_layout.addWidget(self.thumbnail_scroll)
+        thumbnail_group.setLayout(thumbnail_group_layout)
         
-        #run inference button
-        self.inference_button = QPushButton("Run Inference")
-        self.inference_button.setEnabled(False)
-        self.inference_button.clicked.connect(self.run_inference_on_image)
+        # Add groups to right layout
+        right_layout.addWidget(button_group)
+        right_layout.addWidget(thumbnail_group)
         
-        #button and thumbnail side by side
-        controls_and_thumbnails_layout = QHBoxLayout()
-        controls_and_thumbnails_layout.addWidget(buttons_widget, alignment= Qt.AlignTop)
-        controls_and_thumbnails_layout.addWidget(self.thumbnail_scroll)
+        # Main horizontal layout combining left and right
+        main_validate_layout = QHBoxLayout()
+        main_validate_layout.addLayout(left_layout, 2)  # Left side takes 2/3 of space
+        main_validate_layout.addLayout(right_layout, 1)  # Right side takes 1/3 of space
         
         #Final Layout 
-        self.validate_layout.addWidget(self.image_display_label)
-        self.validate_layout.addWidget(self.rotate_button)
-        self.validate_layout.addWidget(self.inference_button)
-        self.validate_layout.addLayout(controls_and_thumbnails_layout)
+        self.validate_layout.addWidget(model_import_group)
+        self.validate_layout.addLayout(main_validate_layout)
         
         
         self.tabs.addTab(self.validate_tab,"Validate")
-        self.tabs.setTabEnabled(1,False)
+        self.tabs.setTabEnabled(1,True)
+        
+        # Crop tab
+        self.crop_tab = QWidget()
+        self.crop_layout = QVBoxLayout(self.crop_tab)
+        
+        # Model selection group
+        crop_model_group = QGroupBox("🤖 Select YOLO Model")
+        crop_model_layout = QVBoxLayout()
+        
+        self.crop_model_path_input = QLineEdit()
+        self.crop_model_path_input.setPlaceholderText("Select YOLO v8 OBB model file (.pt)")
+        self.crop_model_path_input.setReadOnly(True)
+        
+        self.browse_crop_model_button = QPushButton("Browse Model File")
+        self.browse_crop_model_button.clicked.connect(self.browse_crop_model)
+        
+        crop_model_layout.addWidget(QLabel("Model Path:"))
+        crop_model_layout.addWidget(self.crop_model_path_input)
+        crop_model_layout.addWidget(self.browse_crop_model_button)
+        crop_model_group.setLayout(crop_model_layout)
+        
+        # Import directory group
+        import_dir_group = QGroupBox("📂 Import Directory")
+        import_dir_layout = QVBoxLayout()
+        
+        self.import_dir_path_input = QLineEdit()
+        self.import_dir_path_input.setPlaceholderText("Select folder containing images to be cropped")
+        self.import_dir_path_input.setReadOnly(True)
+        
+        self.browse_import_dir_button = QPushButton("Browse Import Directory")
+        self.browse_import_dir_button.clicked.connect(self.browse_import_directory)
+        
+        import_dir_layout.addWidget(QLabel("Import Directory:"))
+        import_dir_layout.addWidget(self.import_dir_path_input)
+        import_dir_layout.addWidget(self.browse_import_dir_button)
+        import_dir_group.setLayout(import_dir_layout)
+        
+        # Export directory group
+        export_dir_group = QGroupBox("💾 Export Directory")
+        export_dir_layout = QVBoxLayout()
+        
+        self.crop_export_dir_input = QLineEdit()
+        self.crop_export_dir_input.setPlaceholderText("Select folder where cropped images will be saved")
+        self.crop_export_dir_input.setReadOnly(True)
+        
+        self.browse_crop_export_button = QPushButton("Browse Export Directory")
+        self.browse_crop_export_button.clicked.connect(self.browse_crop_export_directory)
+        
+        export_dir_layout.addWidget(QLabel("Export Directory:"))
+        export_dir_layout.addWidget(self.crop_export_dir_input)
+        export_dir_layout.addWidget(self.browse_crop_export_button)
+        export_dir_group.setLayout(export_dir_layout)
+        
+        # Start cropping button
+        self.start_crop_button = QPushButton("🔪 Start Cropping Process")
+        self.start_crop_button.setEnabled(False)
+        self.start_crop_button.clicked.connect(self.start_cropping_process)
+        self.start_crop_button.setFixedHeight(50)
+        
+        # Progress and status
+        self.crop_status_label = QLabel("Ready to start cropping...")
+        self.crop_status_label.setStyleSheet("color: blue; font-weight: bold;")
+        
+        # Console output for cropping
+        crop_console_group = QGroupBox("📋 Cropping Progress")
+        crop_console_layout = QVBoxLayout()
+        self.crop_console_output = QTextEdit()
+        self.crop_console_output.setReadOnly(True)
+        self.crop_console_output.setMaximumHeight(200)
+        crop_console_layout.addWidget(self.crop_console_output)
+        crop_console_group.setLayout(crop_console_layout)
+        
+        # Add all groups to crop layout
+        self.crop_layout.addWidget(crop_model_group)
+        self.crop_layout.addWidget(import_dir_group)
+        self.crop_layout.addWidget(export_dir_group)
+        self.crop_layout.addWidget(self.start_crop_button)
+        self.crop_layout.addWidget(self.crop_status_label)
+        self.crop_layout.addWidget(crop_console_group)
+        self.crop_layout.addStretch()
+        
+        # Initialize crop variables
+        self.crop_model_path = ""
+        self.import_directory = ""
+        self.crop_export_directory = ""
+        
+        self.tabs.addTab(self.crop_tab, "Crop")
+        
+        # Settings tab
+        self.settings_tab = QWidget()
+        self.settings_layout = QVBoxLayout(self.settings_tab)
+        
+        # Theme settings group
+        theme_group = QGroupBox("🎨 Theme Settings")
+        theme_layout = QVBoxLayout()
+        
+        # Dark mode toggle button
+        self.dark_mode_button = QPushButton("🌓 Toggle Dark Mode")
+        self.dark_mode_button.clicked.connect(self.toggle_dark_mode)
+        self.dark_mode_button.setFixedSize(200, 40)
+        
+        # Theme description
+        theme_description = QLabel("Switch between light and dark themes for better visibility.")
+        theme_description.setWordWrap(True)
+        theme_description.setStyleSheet("color: gray; font-style: italic;")
+        
+        theme_layout.addWidget(self.dark_mode_button)
+        theme_layout.addWidget(theme_description)
+        theme_layout.addStretch()
+        theme_group.setLayout(theme_layout)
+        
+        # Add theme group to settings layout
+        self.settings_layout.addWidget(theme_group)
+        self.settings_layout.addStretch()
+        
+        # Add settings tab
+        self.tabs.addTab(self.settings_tab, "Settings")
         
         self.central_widget.setLayout(main_layout)
         
@@ -227,6 +400,11 @@ class YOLOTrainerApp(QMainWindow):
     def on_training_complete(self):
         self.console_output.append("Training Completed!")
         self.tabs.setTabEnabled(1,True)
+        self.current_model_available = True
+        if self.model_type_combo.currentText() == "Import Current Model":
+            self.import_model_button.setEnabled(True)
+            self.model_path_label.setText("Current trained model ready to import")
+            self.model_path_label.setStyleSheet("color: green;")
     
     def load_val_set_images(self):
         val_dir = os.path.join(self.destination_path,"dataset","images","val")
@@ -303,10 +481,11 @@ class YOLOTrainerApp(QMainWindow):
             QMessageBox.warning(self,"Error","No image selected for inference.")
             return
         
+        if not self.selected_model_path:
+            QMessageBox.warning(self, "Error", "Please choose a model first using the Import Model section.")
+            return
+        
         try:
-            model_name = self.model_name_input.text().strip()
-            if not model_name:
-                model_name="custom_train"
             angle = self.image_rotation_angles.get(self.current_enlarged_image_path,0)
             pil_image = Image.open(self.current_enlarged_image_path).convert("RGB")
             if angle!=0:
@@ -315,9 +494,7 @@ class YOLOTrainerApp(QMainWindow):
             temp_path=os.path.join(os.getcwd(),"temp_rotated_input.jpg")
             pil_image.save(temp_path)
             
-            model_path = os.path.join(self.destination_path,model_name,"weights","best.pt")
-
-            model = YOLO(model_path)
+            model = YOLO(self.selected_model_path)
             results = model(temp_path)
             
             # if not results or results[0].boxes is None or len(results[0].boxes)==0:
@@ -513,10 +690,437 @@ class YOLOTrainerApp(QMainWindow):
 
         print("✅ Dataset ready at:", working_dir)
 
+    def on_model_type_changed(self):
+        if self.model_type_combo.currentText() == "Import Other Model":
+            self.browse_model_button.setVisible(True)
+            self.import_model_button.setEnabled(False)
+            self.model_path_label.setText("Please browse and select a model file")
+            self.model_path_label.setStyleSheet("color: red;")
+        else:  # Import Current Model
+            self.browse_model_button.setVisible(False)
+            if self.current_model_available:
+                self.import_model_button.setEnabled(True)
+                self.model_path_label.setText("Current trained model ready to import")
+                self.model_path_label.setStyleSheet("color: green;")
+            else:
+                self.import_model_button.setEnabled(False)
+                self.model_path_label.setText("No current model available. Please train a model first.")
+                self.model_path_label.setStyleSheet("color: red;")
+    
+    def browse_model_file(self):
+        model_path, _ = QFileDialog.getOpenFileName(self, "Select Model File", "", "PyTorch Models (*.pt)")
+        if model_path:
+            self.import_model_button.setEnabled(True)
+            self.model_path_label.setText(f"Selected: {os.path.basename(model_path)}")
+            self.model_path_label.setStyleSheet("color: blue;")
+            self.browsed_model_path = model_path
+    
+    def import_selected_model(self):
+        try:
+            if self.model_type_combo.currentText() == "Import Current Model":
+                model_name = self.model_name_input.text().strip()
+                if not model_name:
+                    model_name = "custom_train"
+                model_path = os.path.join(self.destination_path, model_name, "weights", "best.pt")
+                if not os.path.exists(model_path):
+                    QMessageBox.warning(self, "Error", f"Current model not found at: {model_path}")
+                    return
+            else:  # Import Other Model
+                if not hasattr(self, 'browsed_model_path') or not self.browsed_model_path:
+                    QMessageBox.warning(self, "Error", "Please browse and select a model file first.")
+                    return
+                model_path = self.browsed_model_path
             
+            # Test loading the model
+            model = YOLO(model_path)
+            self.selected_model_path = model_path
+            self.model_path_label.setText(f"✅ Model imported: {os.path.basename(model_path)}")
+            self.model_path_label.setStyleSheet("color: green;")
+            QMessageBox.information(self, "Success", "Model imported successfully!")
+            self.log(f"Model imported: {model_path}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to import model:\n{str(e)}")
+            self.model_path_label.setText("❌ Failed to import model")
+            self.model_path_label.setStyleSheet("color: red;")
+
+    def browse_crop_model(self):
+        """Browse and select YOLO model for cropping"""
+        model_path, _ = QFileDialog.getOpenFileName(self, "Select YOLO Model", "", "PyTorch Models (*.pt)")
+        if model_path:
+            self.crop_model_path = model_path
+            self.crop_model_path_input.setText(model_path)
+            self.crop_log(f"Selected model: {os.path.basename(model_path)}")
+            QMessageBox.information(self, "Model Selection", 
+                                  "⚠️ Please ensure this is a YOLO v8 OBB (Oriented Bounding Box) model.\n\n"
+                                  "Regular YOLO models may not work properly for cropping.")
+            self.check_crop_ready()
+    
+    def browse_import_directory(self):
+        """Browse and select import directory containing images"""
+        directory = QFileDialog.getExistingDirectory(self, "Select Import Directory")
+        if directory:
+            self.import_directory = directory
+            self.import_dir_path_input.setText(directory)
+            
+            # Count images in directory
+            image_files = [f for f in os.listdir(directory) 
+                          if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tiff'))]
+            self.crop_log(f"Selected import directory: {directory}")
+            self.crop_log(f"Found {len(image_files)} image(s) to process")
+            self.check_crop_ready()
+    
+    def browse_crop_export_directory(self):
+        """Browse and select export directory for cropped images"""
+        directory = QFileDialog.getExistingDirectory(self, "Select Export Directory")
+        if directory:
+            self.crop_export_directory = directory
+            self.crop_export_dir_input.setText(directory)
+            self.crop_log(f"Selected export directory: {directory}")
+            self.check_crop_ready()
+    
+    def check_crop_ready(self):
+        """Check if all required fields are filled for cropping"""
+        if self.crop_model_path and self.import_directory and self.crop_export_directory:
+            self.start_crop_button.setEnabled(True)
+            self.crop_status_label.setText("✅ Ready to start cropping!")
+            self.crop_status_label.setStyleSheet("color: green; font-weight: bold;")
+        else:
+            self.start_crop_button.setEnabled(False)
+            missing_items = []
+            if not self.crop_model_path:
+                missing_items.append("Model")
+            if not self.import_directory:
+                missing_items.append("Import Directory")
+            if not self.crop_export_directory:
+                missing_items.append("Export Directory")
+            
+            self.crop_status_label.setText(f"❌ Missing: {', '.join(missing_items)}")
+            self.crop_status_label.setStyleSheet("color: red; font-weight: bold;")
+    
+    def crop_log(self, message):
+        """Log message to crop console"""
+        print(f"[CROP] {message}")
+        self.crop_console_output.append(f"[{self.get_timestamp()}] {message}")
+    
+    def get_timestamp(self):
+        """Get current timestamp for logging"""
+        from datetime import datetime
+        return datetime.now().strftime("%H:%M:%S")
+    
+    def start_cropping_process(self):
+        """Start the cropping process"""
+        try:
+            self.crop_console_output.clear()
+            self.crop_log("Starting cropping process...")
+            self.start_crop_button.setEnabled(False)
+            self.crop_status_label.setText("🔄 Processing...")
+            self.crop_status_label.setStyleSheet("color: orange; font-weight: bold;")
+            
+            # Load model
+            self.crop_log("Loading YOLO model...")
+            model = YOLO(self.crop_model_path)
+            self.crop_log("✅ Model loaded successfully")
+            
+            # Get image files
+            image_files = [f for f in os.listdir(self.import_directory) 
+                          if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tiff'))]
+            
+            if not image_files:
+                self.crop_log("❌ No image files found in import directory")
+                QMessageBox.warning(self, "No Images", "No image files found in the selected directory.")
+                self.reset_crop_status()
+                return
+            
+            # Create export directory if it doesn't exist
+            os.makedirs(self.crop_export_directory, exist_ok=True)
+            
+            total_crops = 0
+            processed_images = 0
+            
+            # Process each image
+            for image_file in image_files:
+                image_path = os.path.join(self.import_directory, image_file)
+                self.crop_log(f"Processing: {image_file}")
+                
+                try:
+                    # Run inference
+                    results = model(image_path)
+                    
+                    if not results or len(results) == 0:
+                        self.crop_log(f"  ⚠️ No results for {image_file}")
+                        continue
+                    
+                    result = results[0]
+                    
+                    # Check if any detections were found (OBB model uses .obb instead of .boxes)
+                    if result.obb is None or len(result.obb) == 0:
+                        self.crop_log(f"  ⚠️ No detections found in {image_file}")
+                        continue
+                    
+                    # Load original image
+                    original_image = cv2.imread(image_path)
+                    if original_image is None:
+                        self.crop_log(f"  ❌ Failed to load {image_file}")
+                        continue
+                    
+                    # Process each detection
+                    detections = result.obb
+                    base_name = os.path.splitext(image_file)[0]
+                    
+                    for idx, obb in enumerate(detections):
+                        # Get bounding box coordinates from OBB
+                        # For OBB, we use xyxy which gives us the axis-aligned bounding box
+                        x1, y1, x2, y2 = map(int, obb.xyxy[0].cpu().numpy())
+                        
+                        # Ensure coordinates are within image bounds
+                        height, width = original_image.shape[:2]
+                        x1 = max(0, x1)
+                        y1 = max(0, y1)
+                        x2 = min(width, x2)
+                        y2 = min(height, y2)
+                        
+                        # Crop the image
+                        cropped_image = original_image[y1:y2, x1:x2]
+                        
+                        if cropped_image.size > 0:  # Check if crop is valid
+                            # Generate crop filename
+                            crop_filename = f"{base_name}_crop_{idx+1}.jpg"
+                            crop_path = os.path.join(self.crop_export_directory, crop_filename)
+                            
+                            # Save cropped image
+                            cv2.imwrite(crop_path, cropped_image)
+                            total_crops += 1
+                            
+                            self.crop_log(f"  ✅ Saved crop {idx+1}: {crop_filename}")
+                        else:
+                            self.crop_log(f"  ⚠️ Invalid crop {idx+1} for {image_file}")
+                    
+                    processed_images += 1
+                    
+                except Exception as e:
+                    self.crop_log(f"  ❌ Error processing {image_file}: {str(e)}")
+                    continue
+            
+            # Final summary
+            self.crop_log("\n" + "="*50)
+            self.crop_log(f"📊 CROPPING SUMMARY:")
+            self.crop_log(f"📁 Images processed: {processed_images}/{len(image_files)}")
+            self.crop_log(f"✂️ Total crops saved: {total_crops}")
+            self.crop_log(f"📂 Export directory: {self.crop_export_directory}")
+            self.crop_log("="*50)
+            
+            if total_crops > 0:
+                self.crop_status_label.setText(f"✅ Completed! {total_crops} crops saved")
+                self.crop_status_label.setStyleSheet("color: green; font-weight: bold;")
+                QMessageBox.information(self, "Cropping Complete", 
+                                      f"Successfully processed {processed_images} images and saved {total_crops} crops to:\n{self.crop_export_directory}")
+            else:
+                self.crop_status_label.setText("⚠️ No crops generated")
+                self.crop_status_label.setStyleSheet("color: orange; font-weight: bold;")
+                QMessageBox.warning(self, "No Crops", "No valid crops were generated. Please check your model and images.")
+            
+        except Exception as e:
+            self.crop_log(f"❌ FATAL ERROR: {str(e)}")
+            QMessageBox.critical(self, "Cropping Error", f"An error occurred during cropping:\n{str(e)}")
+            self.crop_status_label.setText("❌ Error occurred")
+            self.crop_status_label.setStyleSheet("color: red; font-weight: bold;")
+        
+        finally:
+            self.reset_crop_status()
+    
+    def reset_crop_status(self):
+        """Reset cropping status and enable button"""
+        self.start_crop_button.setEnabled(True)
+        if self.crop_status_label.text().startswith("🔄"):
+            self.crop_status_label.setText("Ready to start cropping...")
+            self.crop_status_label.setStyleSheet("color: blue; font-weight: bold;")
+
+    def toggle_dark_mode(self):
+        """Toggle between light and dark mode themes"""
+        if self.dark_mode_enabled:
+            # Switch to light mode
+            self.setStyleSheet("")
+            self.dark_mode_enabled = False
+            self.dark_mode_button.setText("🌓 Toggle Dark Mode")
+            self.log("☀️ Light mode enabled")
+        else:
+            # Switch to dark mode
+            dark_stylesheet = """
+                QMainWindow {
+                    background-color: #2b2b2b;
+                    color: #ffffff;
+                }
+                QWidget {
+                    background-color: #2b2b2b;
+                    color: #ffffff;
+                }
+                QTabWidget::pane {
+                    border: 1px solid #555555;
+                    background-color: #3c3c3c;
+                }
+                QTabBar::tab {
+                    background-color: #404040;
+                    color: #ffffff;
+                    padding: 8px 16px;
+                    margin: 2px;
+                    border: 1px solid #555555;
+                    border-bottom: none;
+                    border-radius: 4px 4px 0px 0px;
+                }
+                QTabBar::tab:selected {
+                    background-color: #3c3c3c;
+                    border-bottom: 1px solid #3c3c3c;
+                }
+                QTabBar::tab:hover {
+                    background-color: #505050;
+                }
+                QPushButton {
+                    background-color: #404040;
+                    color: #ffffff;
+                    border: 1px solid #666666;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #505050;
+                    border: 1px solid #777777;
+                }
+                QPushButton:pressed {
+                    background-color: #353535;
+                }
+                QPushButton:disabled {
+                    background-color: #2d2d2d;
+                    color: #666666;
+                    border: 1px solid #444444;
+                }
+                QLineEdit {
+                    background-color: #404040;
+                    color: #ffffff;
+                    border: 1px solid #666666;
+                    padding: 6px;
+                    border-radius: 4px;
+                }
+                QLineEdit:focus {
+                    border: 2px solid #0078d4;
+                }
+                QTextEdit {
+                    background-color: #1e1e1e;
+                    color: #ffffff;
+                    border: 1px solid #666666;
+                    border-radius: 4px;
+                }
+                QLabel {
+                    color: #ffffff;
+                }
+                QGroupBox {
+                    font-weight: bold;
+                    border: 2px solid #666666;
+                    border-radius: 8px;
+                    margin: 8px 0px;
+                    padding: 8px;
+                    color: #ffffff;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0px 8px 0px 8px;
+                    color: #ffffff;
+                }
+                QComboBox {
+                    background-color: #404040;
+                    color: #ffffff;
+                    border: 1px solid #666666;
+                    padding: 6px;
+                    border-radius: 4px;
+                }
+                QComboBox:hover {
+                    border: 1px solid #777777;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                    background-color: #505050;
+                    border-radius: 4px;
+                }
+                QComboBox::down-arrow {
+                    image: none;
+                    border-left: 5px solid transparent;
+                    border-right: 5px solid transparent;
+                    border-top: 5px solid #ffffff;
+                    width: 0px;
+                    height: 0px;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #404040;
+                    color: #ffffff;
+                    selection-background-color: #0078d4;
+                    border: 1px solid #666666;
+                }
+                QSlider::groove:horizontal {
+                    border: 1px solid #666666;
+                    height: 8px;
+                    background: #404040;
+                    border-radius: 4px;
+                }
+                QSlider::handle:horizontal {
+                    background: #0078d4;
+                    border: 1px solid #0078d4;
+                    width: 18px;
+                    height: 18px;
+                    margin: -5px 0;
+                    border-radius: 9px;
+                }
+                QSlider::handle:horizontal:hover {
+                    background: #106ebe;
+                }
+                QScrollArea {
+                    background-color: #3c3c3c;
+                    border: 1px solid #666666;
+                    border-radius: 4px;
+                }
+                QScrollBar:vertical {
+                    background-color: #404040;
+                    width: 16px;
+                    border-radius: 8px;
+                }
+                QScrollBar::handle:vertical {
+                    background-color: #666666;
+                    border-radius: 8px;
+                    min-height: 20px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background-color: #777777;
+                }
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                    height: 0px;
+                }
+                QScrollBar:horizontal {
+                    background-color: #404040;
+                    height: 16px;
+                    border-radius: 8px;
+                }
+                QScrollBar::handle:horizontal {
+                    background-color: #666666;
+                    border-radius: 8px;
+                    min-width: 20px;
+                }
+                QScrollBar::handle:horizontal:hover {
+                    background-color: #777777;
+                }
+                QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                    width: 0px;
+                }
+            """
+            self.setStyleSheet(dark_stylesheet)
+            self.dark_mode_enabled = True
+            self.dark_mode_button.setText("☀️ Toggle Light Mode")
+            self.log("🌙 Dark mode enabled")
+
+    # ...existing code...
+    
 if __name__ == "__main__":
     app = QApplication([])
-    window = YOLOTrainerApp()
+    window = MODELTrainerApp()
     window.showMaximized()
     app.exec_()
-        
