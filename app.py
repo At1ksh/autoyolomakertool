@@ -495,7 +495,7 @@ class MODELTrainerApp(QMainWindow):
             pil_image.save(temp_path)
             
             model = YOLO(self.selected_model_path)
-            results = model(temp_path)
+            results = model(temp_path,conf=0.4)
             
             # if not results or results[0].boxes is None or len(results[0].boxes)==0:
             #     QMessageBox.information(self,"Inference","No Objects detected in the image")
@@ -544,7 +544,7 @@ class MODELTrainerApp(QMainWindow):
             
 
                      
-    def normalize_quad_coords(Self,coords,img_w=1280,img_h=720):
+    def normalize_quad_coords(Self,coords,img_w,img_h):
         normalized=[]
         for i in range(0, len(coords), 2):
             x = coords[i] / img_w
@@ -636,6 +636,15 @@ class MODELTrainerApp(QMainWindow):
                 
                 src_img = os.path.join(images_dir, img_file)
                 dest_img_path = os.path.join(dest_img, img_file)
+                
+                # Get actual image dimensions before moving
+                try:
+                    with Image.open(src_img) as img:
+                        img_w, img_h = img.size
+                except Exception as e:
+                    print(f"Error reading image {img_file}: {e}")
+                    img_w, img_h = 1280, 720  # fallback to default
+                
                 shutil.move(src_img, dest_img_path)
                 
                 #normalizing nw
@@ -659,7 +668,7 @@ class MODELTrainerApp(QMainWindow):
                         if len(parts) == 9:
                             class_id = int(parts[0])
                             coords = list(map(float, parts[1:]))
-                            normalized = self.normalize_quad_coords(coords)
+                            normalized = self.normalize_quad_coords(coords, img_w, img_h)
                             line_str = f"{class_id} " + " ".join(f"{v:.6f}" for v in normalized)
                             new_lines.append(line_str)
                         else:
@@ -845,7 +854,7 @@ class MODELTrainerApp(QMainWindow):
                 
                 try:
                     # Run inference
-                    results = model(image_path)
+                    results = model(image_path,conf=0.4)
                     
                     if not results or len(results) == 0:
                         self.crop_log(f"  ⚠️ No results for {image_file}")
